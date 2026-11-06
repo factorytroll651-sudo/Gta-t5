@@ -14,247 +14,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write project files
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/src/main/java/com/fiveplay/app
+      - name: Unzip project
+        run: unzip -o FivePlay-project.zip
 
-          cat > settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "FivePlay"
-          include ':app'
-          EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-          cat > build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.5.2' apply false
-          }
-          EOF
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-          cat > app/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application'
-          }
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon
 
-          android {
-              namespace 'com.fiveplay.app'
-              compileSdk 34
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk FivePlay.apk
 
-              defaultConfig {
-                  applicationId 'com.fiveplay.app'
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 1
-                  versionName '1.0'
-              }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FivePlay-apk
+          path: FivePlay.apk
 
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          EOF
-
-          cat > app/src/main/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-              <application
-                  android:label="FivePlay"
-                  android:allowBackup="false"
-                  android:hardwareAccelerated="true"
-                  android:usesCleartextTraffic="false"
-                  android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTask"
-                      android:screenOrientation="sensorLandscape"
-                      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|density">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          cat > app/src/main/java/com/fiveplay/app/ControlOverlay.java <<'EOF'
-          package com.fiveplay.app;
-
-          import android.content.Context;
-          import android.graphics.Canvas;
-          import android.graphics.Paint;
-          import android.view.MotionEvent;
-          import android.view.View;
-
-          import java.util.ArrayList;
-          import java.util.List;
-
-          public class ControlOverlay extends View {
-
-              public interface KeyListener {
-                  void onKey(int keyCode, boolean down);
-              }
-
-              private static final class Btn {
-                  final String label;
-                  final int keyCode;
-                  float cx, cy, r;
-                  int pointerId = -1;
-
-                  Btn(String label, int keyCode) {
-                      this.label = label;
-                      this.keyCode = keyCode;
-                  }
-
-                  boolean hit(float x, float y) {
-                      float dx = x - cx, dy = y - cy, rr = r * 1.25f;
-                      return dx * dx + dy * dy <= rr * rr;
-                  }
-              }
-
-              // Diamond layout: bottom, right, left, top
-              private static final float[] OFF_X = {0f, 1f, -1f, 0f};
-              private static final float[] OFF_Y = {1f, 0f, 0f, -1f};
-
-              private final KeyListener listener;
-              private final int[] stickKeys; // up, left, down, right
-              private final boolean[] stickDown = new boolean[4];
-              private final List<Btn> buttons = new ArrayList<>();
-              private final float density;
-              private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-              private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-              private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-              private float stickCx, stickCy, stickR, thumbX, thumbY;
-              private int stickPointer = -1;
-              private float toggleCx, toggleCy, toggleR;
-              private boolean hidden = false;
-
-              public ControlOverlay(Context ctx, KeyListener listener, int[] stickKeys,
-                                    String[] labels, int[] keys) {
-                  super(ctx);
-                  if (listener == null) {
-                      throw new IllegalArgumentException("listener is null");
-                  }
-                  if (stickKeys == null || stickKeys.length != 4) {
-                      throw new IllegalArgumentException("stickKeys needs 4 keys: up, left, down, right");
-                  }
-                  if (labels == null || keys == null || labels.length != keys.length || labels.length > 4) {
-                      throw new IllegalArgumentException("labels/keys must match and hold at most 4 entries");
-                  }
-                  this.listener = listener;
-                  this.stickKeys = stickKeys.clone();
-                  this.density = ctx.getResources().getDisplayMetrics().density;
-                  for (int i = 0; i < labels.length; i++) {
-                      buttons.add(new Btn(labels[i], keys[i]));
-                  }
-                  fillPaint.setStyle(Paint.Style.FILL);
-                  strokePaint.setStyle(Paint.Style.STROKE);
-                  strokePaint.setStrokeWidth(2f * density);
-                  textPaint.setTextAlign(Paint.Align.CENTER);
-                  textPaint.setTextSize(20f * density);
-                  textPaint.setFakeBoldText(true);
-                  setFocusable(false);
-              }
-
-              @Override
-              protected void onSizeChanged(int w, int h, int ow, int oh) {
-                  float d = density;
-                  stickR = 62f * d;
-                  stickCx = 36f * d + stickR;
-                  stickCy = h - 28f * d - stickR;
-                  thumbX = stickCx;
-                  thumbY = stickCy;
-
-                  float br = 30f * d;
-                  float spacing = 40f * d;
-                  float clusterCx = w - 36f * d - spacing - br;
-                  float clusterCy = h - 28f * d - spacing - br;
-                  for (int i = 0; i < buttons.size(); i++) {
-                      Btn b = buttons.get(i);
-                      b.r = br;
-                      b.cx = clusterCx + OFF_X[i] * spacing;
-                      b.cy = clusterCy + OFF_Y[i] * spacing;
-                  }
-
-                  toggleR = 16f * d;
-                  toggleCx = w - 28f * d;
-                  toggleCy = 28f * d;
-              }
-
-              @Override
-              protected void onDraw(Canvas c) {
-                  if (!hidden) {
-                      fillPaint.setColor(0x33FFFFFF);
-                      c.drawCircle(stickCx, stickCy, stickR, fillPaint);
-                      strokePaint.setColor(0x99FFFFFF);
-                      c.drawCircle(stickCx, stickCy, stickR, strokePaint);
-                      fillPaint.setColor(0x88FFFFFF);
-                      c.drawCircle(thumbX, thumbY, stickR * 0.42f, fillPaint);
-
-                      for (Btn b : buttons) {
-                          boolean on = b.pointerId != -1;
-                          fillPaint.setColor(on ? 0xAAFFFFFF : 0x33FFFFFF);
-                          c.drawCircle(b.cx, b.cy, b.r, fillPaint);
-                          strokePaint.setColor(0x99FFFFFF);
-                          c.drawCircle(b.cx, b.cy, b.r, strokePaint);
-                          textPaint.setColor(on ? 0xFF000000 : 0xDDFFFFFF);
-                          drawCentered(c, b.label, b.cx, b.cy);
-                      }
-                  }
-                  fillPaint.setColor(0x44FFFFFF);
-                  c.drawCircle(toggleCx, toggleCy, toggleR, fillPaint);
-                  textPaint.setColor(0xDDFFFFFF);
-                  drawCentered(c, hidden ? "+" : "-", toggleCx, toggleCy);
-              }
-
-              private void drawCentered(Canvas c, String t, float x, float y) {
-                  Paint.FontMetrics fm = textPaint.getFontMetrics();
-                  c.drawText(t, x, y - (fm.ascent + fm.descent) / 2f, textPaint);
-              }
-
-              @Override
-              public boolean onTouchEvent(MotionEvent e) {
-                  int action = e.getActionMasked();
-                  int idx = e.getActionIndex();
-                  switch (action) {
-                      case MotionEvent.ACTION_DOWN:
-                      case MotionEvent.ACTION_POINTER_DOWN: {
-                          float x = e.getX(idx);
-                          float y = e.getY(idx);
-                          int id = e.getPointerId(idx);
-
-                          float tx = x - toggleCx, ty = y - toggleCy, tr = toggleR * 1.6f;
-                          if (tx * tx + ty * ty <= tr * tr) {
-                              setHidden(!hidden);
-                              return true;
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: FivePlay build ${{ github.run_number }}
+          files: FivePlay.apk                 return true;
                           }
                           if (hidden) {
                               return false;
