@@ -1,9 +1,14 @@
-name: Build APK
+name: Build SensiPro APK
 
 on:
+  workflow_dispatch:
+    inputs:
+      dev_unlock:
+        description: "Enable the 7-tap Elite dev unlock in this APK (1 = yes, 0 = no). Use 0 for a public release."
+        default: "1"
+        required: false
   push:
     branches: [main, master]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,42 +16,82 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      EXPO_PUBLIC_ENABLE_DEV_UNLOCK: ${{ inputs.dev_unlock || '1' }}
+      EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      EXPO_PUBLIC_RC_ANDROID_KEY: ${{ secrets.RC_ANDROID_KEY }}
+      EXPO_PUBLIC_COACH_API_URL: ${{ secrets.COACH_API_URL }}
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip project
+      - name: Locate project
+        id: locate
         run: |
-          ZIP="$(find . -maxdepth 1 -type f -iname 'gtavbysiwoo.zip' | head -n 1)"
-          if [ -z "$ZIP" ]; then
-            echo "GTAVBYSIwoo.zip repo ke root mein nahi mili. Repo ki files:"
-            ls -la
+          if [ -f SensiPro-project.zip ]; then
+            rm -rf project && mkdir project
+            unzip -oq SensiPro-project.zip -d project
+            echo "dir=project" >> "$GITHUB_OUTPUT"
+          elif [ -f package.json ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          else
+            echo "Neither SensiPro-project.zip nor package.json found in the repo root." >&2
             exit 1
           fi
-          echo "Using $ZIP"
-          unzip -o "$ZIP"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      - name: Install dependencies
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          npm install --legacy-peer-deps
+          npx expo install \
+            expo-router expo-constants expo-linking expo-status-bar expo-system-ui expo-splash-screen expo-font \
+            expo-device expo-application expo-haptics expo-image-picker expo-intent-launcher expo-clipboard \
+            @react-native-async-storage/async-storage react-native-reanimated react-native-worklets \
+            react-native-gesture-handler react-native-safe-area-context react-native-screens @expo/vector-icons \
+            -- --legacy-peer-deps
+          npx expo install --fix -- --legacy-peer-deps
 
-      - name: Build APK
-        run: gradle assembleDebug --no-daemon
+      - name: Generate Android project
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: npx expo prebuild --platform android --clean --no-install
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk GTAVBYSiwoo.apk
+      - name: Gradle settings
+        working-directory: ${{ steps.locate.outputs.dir }}/android
+        run: |
+          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+          echo "org.gradle.daemon=false" >> gradle.properties
+          sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a,armeabi-v7a/' gradle.properties
+
+      - name: Build release APK
+        working-directory: ${{ steps.locate.outputs.dir }}/android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp "${{ steps.locate.outputs.dir }}"/android/app/build/outputs/apk/release/*.apk out/SensiPro-FF.apk
+          ls -lh out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: GTAVBYSiwoo-apk
-          path: GTAVBYSiwoo.apk
+          name: SensiPro-FF-apk
+          path: out/SensiPro-FF.apk
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: siwoo-build-${{ github.run_number }}
-          name: GTA V Cloud by Siwoo build ${{ github.run_number }}
-          files: GTAVBYSiwoo.apk
+          tag_name: build-${{ github.run_number }}
+          name: SensiPro FF build ${{ github.run_number }}
+          files: out/SensiPro-FF.apk
