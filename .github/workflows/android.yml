@@ -84,14 +84,18 @@ jobs:
           cp "${{ steps.locate.outputs.dir }}"/android/app/build/outputs/apk/release/*.apk out/SensiPro-FF.apk
           ls -lh out
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SensiPro-FF-apk
-          path: out/SensiPro-FF.apk
-
+      # Release first: even if GitHub's artifact service has a bad moment, the APK still lands in Releases.
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: SensiPro FF build ${{ github.run_number }}
           files: out/SensiPro-FF.apk
+
+      - name: Upload artifact (backup copy)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: SensiPro-FF-apk
+          path: out/SensiPro-FF.apk
+          retention-days: 7
